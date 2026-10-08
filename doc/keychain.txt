@@ -53,7 +53,7 @@ For apps launched from inside Neovim (e.g. via `:terminal` or
 `jobstart()`), |:KeychainLoad| is an alternative that never touches disk:
 it sets the resolved values on `vim.env` for the current session instead.
 Since a process only inherits environment variables at the moment it is
-spawned, this only reaches processes started *after* |:KeychainLoad| runs
+spawned, this only reaches processes started after |:KeychainLoad| runs
 and *as children of Neovim* - use |:KeychainUnload| to clear them again.
 
 ==============================================================================
@@ -89,7 +89,7 @@ and *as children of Neovim* - use |:KeychainUnload| to clear them again.
 :KeychainLoad
     Resolve every `keychain://` reference (and plain value) in the current
     `.env` buffer and set them on `vim.env` for this Neovim session -
-    no file is written. Only processes started from Neovim *after* this
+    no file is written. Only processes started from Neovim after this
     runs (|:terminal|, `jobstart()`, etc.) will inherit them; an
     already-running terminal/job won't see the update.
 
