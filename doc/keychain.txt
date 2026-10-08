@@ -1,0 +1,173 @@
+*keychain.txt*   Keep secrets out of your .env files, backed by the macOS Keychain
+
+==============================================================================
+CONTENTS                                                    *keychain-contents*
+
+    1. Introduction ............... |keychain-introduction|
+    2. Setup ....................... |keychain-setup|
+    3. Workflow .................... |keychain-workflow|
+    4. Commands .................... |keychain-commands|
+    5. Configuration ............... |keychain-configuration|
+    6. Security notes .............. |keychain-security|
+
+==============================================================================
+1. INTRODUCTION                                         *keychain-introduction*
+
+keychain.nvim stores secret values in the macOS Keychain and leaves only
+safe `keychain://ACCOUNT` references in your `.env` files. A background
+diagnostics pass also flags lines that look like plaintext secrets so you
+notice them before committing.
+
+Requirements: Neovim >= 0.10, macOS (uses the built-in `security` CLI).
+
+==============================================================================
+2. SETUP                                                       *keychain-setup*
+
+keychain.nvim does not call setup() for you. Call it explicitly from your
+config: >lua
+
+    require("keychain").setup({
+      -- see |keychain-configuration| for all options
+    })
+<
+With lazy.nvim, `opts = {}` (or a table of overrides) achieves the same
+thing.
+
+==============================================================================
+3. WORKFLOW                                                 *keychain-workflow*
+
+A committed `.env` only ever contains references: >
+
+    API_KEY=keychain://API_KEY
+<
+Each project is scoped to its own Keychain "service" so the same key name
+in two different projects never collides. The service is derived from the
+project's git root (or cwd, depending on |keychain-project_id_strategy|).
+
+Run |:KeychainSync| to resolve those references into a real, plaintext file
+(default `.env.local`) for tools/processes that actually need environment
+variables at runtime. The plugin offers to add that file to `.gitignore`
+automatically.
+
+For apps launched from inside Neovim (e.g. via `:terminal` or
+`jobstart()`), |:KeychainLoad| is an alternative that never touches disk:
+it sets the resolved values on `vim.env` for the current session instead.
+Since a process only inherits environment variables at the moment it is
+spawned, this only reaches processes started *after* |:KeychainLoad| runs
+and *as children of Neovim* - use |:KeychainUnload| to clear them again.
+
+==============================================================================
+4. COMMANDS                                               *keychain-commands*
+
+                                                                *:KeychainSet*
+:KeychainSet [{key}]
+    Prompt (masked input) for a secret value, store it in the Keychain, and
+    write/replace `{key}=keychain://{key}` at the cursor (or append it to
+    the buffer). Without {key}, uses the key on the current line, or
+    prompts for one.
+
+                                                                *:KeychainGet*
+:KeychainGet [{key}]
+    Look up the secret for {key} (or the reference/key under the cursor),
+    show it briefly in a floating window, and yank it into a scratch
+    register (see |keychain-scratch_register|). Both the window and the
+    register auto-clear after |keychain-reveal_seconds|.
+
+                                                            *:KeychainMigrate*
+:KeychainMigrate
+    Scan the current buffer for plaintext-looking secrets and interactively
+    offer to move each one into the Keychain, replacing it with a
+    reference.
+
+                                                               *:KeychainSync*
+:KeychainSync [{target}]
+    Resolve every `keychain://` reference in the current `.env` into a real
+    file (default: |keychain-sync.target|), and offer to add it to
+    `.gitignore` if it isn't already ignored.
+
+                                                               *:KeychainLoad*
+:KeychainLoad
+    Resolve every `keychain://` reference (and plain value) in the current
+    `.env` buffer and set them on `vim.env` for this Neovim session -
+    no file is written. Only processes started from Neovim *after* this
+    runs (|:terminal|, `jobstart()`, etc.) will inherit them; an
+    already-running terminal/job won't see the update.
+
+                                                             *:KeychainUnload*
+:KeychainUnload
+    Unset every env var previously set by |:KeychainLoad| in this session.
+
+                                                             *:KeychainDelete*
+:KeychainDelete [{key}]
+    Delete a Keychain entry for {key} (with confirmation).
+
+==============================================================================
+5. CONFIGURATION                                       *keychain-configuration*
+
+>lua
+    require("keychain").setup({
+      service_prefix = "nvim-env:",
+      project_id_strategy = "git_root", -- or "cwd"
+
+      env_file_patterns = { "^%.env$", "^%.env%.[%w_.-]+$" },
+      env_file_ignore_patterns = { "%.example$", "%.sample$", "%.template$" },
+
+      sync = {
+        target = ".env.local",
+        add_marker = true,
+        auto_gitignore = true,
+      },
+
+      detection = {
+        enabled = true,
+        min_entropy = 3.0,
+        min_length = 8,
+        min_entropy_unnamed = 3.6,
+        min_length_unnamed = 20,
+        key_patterns = { "SECRET", "TOKEN", "PASSWORD", "API[_-]?KEY" },
+        ignore_values = { "^changeme$", "^xxx+$" },
+      },
+
+      reveal_seconds = 10,
+      scratch_register = "z",
+    })
+<
+                                                    *keychain-project_id_strategy*
+project_id_strategy ~
+    `"git_root"` (default) scopes secrets to the nearest `.git` root;
+    `"cwd"` scopes them to Neovim's current working directory instead.
+
+                                                          *keychain-sync.target*
+sync.target ~
+    Default output path for |:KeychainSync| when no {target} argument is
+    given. Resolved relative to the source `.env` file's directory.
+
+                                                    *keychain-scratch_register*
+scratch_register ~
+    Register used by |:KeychainGet| to hold the revealed secret
+    (default: `"z"`, i.e. register `@z`). Deliberately not the system
+    clipboard.
+
+                                                       *keychain-reveal_seconds*
+reveal_seconds ~
+    How long a revealed secret's floating window stays open and its
+    scratch register stays populated before auto-clearing.
+
+==============================================================================
+6. SECURITY NOTES                                            *keychain-security*
+
+- Secrets are passed to the `security` CLI as argv values, never
+  shell-interpolated, but remain visible in that process's argv for its
+  short lifetime (e.g. via `ps`), which is an inherent limitation of
+  shelling out to `security`.
+- |:KeychainSync| writes real secrets to disk in plaintext by design - some
+  tools need a real `.env`. Make sure the generated file stays gitignored.
+- |:KeychainLoad| avoids the file, but secrets still live in Neovim's
+  process environment until |:KeychainUnload| or quitting Neovim, and
+  remain visible to other processes owned by the same user (e.g.
+  `ps eww <pid>`) - the same class of exposure as the `security` CLI's argv.
+- The plaintext-secret diagnostics are heuristic (key-name patterns plus
+  value entropy/length) and can have false positives/negatives. Treat them
+  as a nudge, not a guarantee.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
